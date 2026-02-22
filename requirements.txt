@@ -1,2 +1,8 @@
-flask
 requests
+beautifulsoup4
+lxml
+
+# CATATAN: 
+# Kalau lo maksa masukin 'selenium' atau 'playwright' di sini, 
+# kemungkinan besar Vercel lo bakal error "Serverless Function has exceeded the unzipped maximum size of 250 MB" 
+# pas lagi proses deploy.
