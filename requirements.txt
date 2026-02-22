@@ -1,0 +1,4 @@
+playwright
+playwright-aws-lambda
+flask
+flask-cors
