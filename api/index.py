@@ -6,43 +6,41 @@ app = Flask(__name__)
 
 def scrape_wetv(url):
     with sync_playwright() as p:
-        # Launch browser (chromium)
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
-        
+        # Kita pakai chromium, tapi tanpa download full browser di runtime
+        # Vercel butuh executable path yang benar jika pakai custom layer, 
+        # tapi untuk basic, kita coba headless standar dulu.
         try:
-            # Buka URL dengan timeout 30 detik
-            page.goto(url, wait_until="networkidle", timeout=60000)
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
             
-            # Tunggu element judul muncul
-            page.wait_for_selector(".video_title", timeout=10000)
+            # Berpura-pura jadi user beneran agar tidak di-block
+            page.set_extra_http_headers({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+            })
+
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
             
-            # Ambil data
-            data = {
-                "title": page.inner_text(".video_title"),
-                "description": page.inner_text(".video_desc") if page.query_selector(".video_desc") else "No description",
-                "current_episode": page.inner_text(".episode_item.active") if page.query_selector(".episode_item.active") else "Unknown",
+            # Tunggu selector judul filmnya muncul
+            page.wait_for_selector(".video_title", timeout=5000)
+
+            result = {
+                "title": page.inner_text(".video_title").strip(),
+                "episode": page.inner_text(".episode_item.active").strip() if page.query_selector(".episode_item.active") else "Single/Movie",
                 "status": "success"
             }
+            browser.close()
+            return result
         except Exception as e:
-            data = {"status": "error", "message": str(e)}
-        
-        browser.close()
-        return data
+            if 'browser' in locals(): browser.close()
+            return {"status": "error", "message": str(e)}
 
-@app.route('/api/scrape', methods=['GET'])
+@app.route('/api/scrape')
 def api_scrape():
     target_url = request.args.get('url')
     if not target_url:
-        return jsonify({"error": "Kasih parameter ?url= link wetv nya bro"}), 400
-    
-    result = scrape_wetv(target_url)
-    return jsonify(result)
+        return jsonify({"error": "Mana link-nya bro?"}), 400
+    return jsonify(scrape_wetv(target_url))
 
-# Root route
 @app.route('/')
 def home():
-    return "WeTV Scraper API is Running!"
+    return "WeTV Scraper is Active!"
