@@ -1,104 +1,120 @@
 from flask import Flask, request, jsonify
-import requests
+from flask_cors import CORS
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 
 app = Flask(__name__)
+CORS(app) # Mengatasi error CORS saat diakses via HTML/Frontend
 
-# Headers agar website tidak mengira kita bot
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
+# Kita pakai impersonate biar request dari Vercel dianggap sebagai Google Chrome beneran
+BROWSER_IMPERSONATE = "chrome110"
 
 @app.route('/')
 def home():
-    return jsonify({"status": "Scraper Moviebox Jalan!", "message": "Gunakan endpoint /search, /detail, /play, atau /filter"})
+    return jsonify({
+        "status": "API Moviebox Aktif!", 
+        "endpoints": ["/search?keyword=...", "/detail?url=...", "/play?url=...", "/filter?genre=..."]
+    })
 
-# 1. Endpoint untuk Search (List Film)
 @app.route('/search')
 def search():
     keyword = request.args.get('keyword', '')
+    if not keyword:
+        return jsonify({"error": "Masukkan parameter keyword"}), 400
+
     url = f"https://moviebox.ph/web/searchResult?keyword={keyword}"
     
-    response = requests.get(url, headers=HEADERS)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    results = []
-    # CATATAN: Class HTML di bawah ('movie-item', 'title', dll) 
-    # perlu kamu sesuaikan dengan inspect element di website aslinya
-    items = soup.find_all('div', class_='movie-item') 
-    
-    for item in items:
-        results.append({
-            "title": item.find('h3', class_='title').text.strip() if item.find('h3', class_='title') else None,
-            "link": item.find('a')['href'] if item.find('a') else None,
-            "image": item.find('img')['src'] if item.find('img') else None
-        })
+    try:
+        response = requests.get(url, impersonate=BROWSER_IMPERSONATE, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-    return jsonify({"keyword": keyword, "data": results})
+        results = []
+        # NOTE: Class 'movie-item' ini contoh. Lu WAJIB sesuaikan dengan inspect element di web Moviebox
+        items = soup.find_all('div', class_='movie-item') 
+        
+        for item in items:
+            title_tag = item.find('h3') # Sesuaikan tag
+            link_tag = item.find('a')
+            img_tag = item.find('img')
+            
+            if title_tag and link_tag:
+                results.append({
+                    "title": title_tag.text.strip(),
+                    "link": link_tag['href'] if link_tag.has_attr('href') else "",
+                    "image": img_tag['src'] if img_tag and img_tag.has_attr('src') else ""
+                })
+                
+        return jsonify({"success": True, "keyword": keyword, "data": results})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
-# 2. Endpoint untuk Detail Film
 @app.route('/detail')
 def detail():
-    # Contoh parameter: ?url=https://moviebox.ph/detail/...
     target_url = request.args.get('url')
     if not target_url:
-         return jsonify({"error": "URL detail dibutuhkan"}), 400
+         return jsonify({"error": "Parameter url dibutuhkan"}), 400
 
-    response = requests.get(target_url, headers=HEADERS)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # Ganti class sesuai inspect element
-    detail_data = {
-        "title": soup.find('h1').text.strip() if soup.find('h1') else None,
-        "synopsis": soup.find('div', class_='synopsis').text.strip() if soup.find('div', class_='synopsis') else None,
-        "rating": soup.find('span', class_='rating').text.strip() if soup.find('span', class_='rating') else None
-    }
-    
-    return jsonify({"data": detail_data})
+    try:
+        response = requests.get(target_url, impersonate=BROWSER_IMPERSONATE, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # NOTE: Sesuaikan tag dan class di bawah dengan struktur web asli
+        detail_data = {
+            "title": soup.find('h1').text.strip() if soup.find('h1') else "Tidak diketahui",
+            "synopsis": soup.find('div', class_='desc').text.strip() if soup.find('div', class_='desc') else "",
+            "poster": soup.find('img', class_='poster')['src'] if soup.find('img', class_='poster') else ""
+        }
+        
+        return jsonify({"success": True, "data": detail_data})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
-# 3. Endpoint untuk Nonton (Video Play)
 @app.route('/play')
 def play():
-    target_url = request.args.get('url') # URL 123movienow.cc
+    # URL target ini harus link yang mengarah ke 123movienow.cc
+    target_url = request.args.get('url') 
     if not target_url:
-         return jsonify({"error": "URL video dibutuhkan"}), 400
+         return jsonify({"error": "Parameter url dibutuhkan"}), 400
          
-    response = requests.get(target_url, headers=HEADERS)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # Target utama: Cari tag <video> atau <iframe> tempat filmnya diputar
-    video_src = soup.find('video')
-    iframe_src = soup.find('iframe')
-    
-    return jsonify({
-        "video_url": video_src['src'] if video_src and 'src' in video_src.attrs else None,
-        "iframe_url": iframe_src['src'] if iframe_src and 'src' in iframe_src.attrs else None
-    })
+    try:
+        response = requests.get(target_url, impersonate=BROWSER_IMPERSONATE, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        video_src = soup.find('video')
+        iframe_src = soup.find('iframe')
+        
+        return jsonify({
+            "success": True,
+            "video_url": video_src['src'] if video_src and video_src.has_attr('src') else None,
+            "iframe_url": iframe_src['src'] if iframe_src and iframe_src.has_attr('src') else None
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
-# 4. Endpoint untuk Kategori / Filter
 @app.route('/filter')
 def filter_movies():
-    # Ambil parameter dari request kamu, ada defaultnya
     genre = request.args.get('genre', 'All')
     country = request.args.get('country', 'All')
     year = request.args.get('year', 'All')
     
     url = f"https://moviebox.ph/web/film?type=/home/movieFilter&tabId=2&classify=All&country={country}&genre={genre}&sort=ForYou&year={year}"
     
-    response = requests.get(url, headers=HEADERS)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    results = []
-    # Sesuaikan dengan class di halaman kategori
-    items = soup.find_all('div', class_='filter-item') 
-    
-    for item in items:
-         results.append({
-            "title": item.text.strip(),
-            # Tambahkan ekstraksi data lain di sini
-        })
+    try:
+        response = requests.get(url, impersonate=BROWSER_IMPERSONATE, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-    return jsonify({"filters": {"genre": genre, "country": country, "year": year}, "data": results})
+        results = []
+        items = soup.find_all('div', class_='filter-item') # Sesuaikan class
+        
+        for item in items:
+             results.append({
+                "title": item.text.strip(),
+            })
+            
+        return jsonify({"success": True, "filters": {"genre": genre, "country": country, "year": year}, "data": results})
+    except Exception as e:
+         return jsonify({"success": False, "error": str(e)}), 500
 
+# Wajib untuk Vercel Serverless Function
 if __name__ == '__main__':
     app.run(debug=True)
