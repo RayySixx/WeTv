@@ -1,18 +1,23 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from curl_cffi import requests
 from bs4 import BeautifulSoup
+import cloudscraper
 
 app = Flask(__name__)
-CORS(app) # Mengatasi error CORS saat diakses via HTML/Frontend
+CORS(app) # Mengatasi error CORS saat API diakses lewat frontend HTML
 
-# Kita pakai impersonate biar request dari Vercel dianggap sebagai Google Chrome beneran
-BROWSER_IMPERSONATE = "chrome110"
+# Bikin instance scraper yang nyamar jadi Chrome di Windows
+# Ini otomatis nge-handle bypass dasar WAF/Cloudflare
+scraper = cloudscraper.create_scraper(browser={
+    'browser': 'chrome',
+    'platform': 'windows',
+    'desktop': True
+})
 
 @app.route('/')
 def home():
     return jsonify({
-        "status": "API Moviebox Aktif!", 
+        "status": "API Moviebox dengan Cloudscraper Aktif!", 
         "endpoints": ["/search?keyword=...", "/detail?url=...", "/play?url=...", "/filter?genre=..."]
     })
 
@@ -25,15 +30,15 @@ def search():
     url = f"https://moviebox.ph/web/searchResult?keyword={keyword}"
     
     try:
-        response = requests.get(url, impersonate=BROWSER_IMPERSONATE, timeout=10)
+        response = scraper.get(url, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         results = []
-        # NOTE: Class 'movie-item' ini contoh. Lu WAJIB sesuaikan dengan inspect element di web Moviebox
+        # NOTE: Class 'movie-item' wajib lu sesuaikan dengan hasil inspect element web asli
         items = soup.find_all('div', class_='movie-item') 
         
         for item in items:
-            title_tag = item.find('h3') # Sesuaikan tag
+            title_tag = item.find('h3')
             link_tag = item.find('a')
             img_tag = item.find('img')
             
@@ -55,10 +60,10 @@ def detail():
          return jsonify({"error": "Parameter url dibutuhkan"}), 400
 
     try:
-        response = requests.get(target_url, impersonate=BROWSER_IMPERSONATE, timeout=10)
+        response = scraper.get(target_url, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # NOTE: Sesuaikan tag dan class di bawah dengan struktur web asli
+        # NOTE: Sesuaikan tag dan class di bawah ini
         detail_data = {
             "title": soup.find('h1').text.strip() if soup.find('h1') else "Tidak diketahui",
             "synopsis": soup.find('div', class_='desc').text.strip() if soup.find('div', class_='desc') else "",
@@ -77,7 +82,7 @@ def play():
          return jsonify({"error": "Parameter url dibutuhkan"}), 400
          
     try:
-        response = requests.get(target_url, impersonate=BROWSER_IMPERSONATE, timeout=10)
+        response = scraper.get(target_url, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         video_src = soup.find('video')
@@ -100,7 +105,7 @@ def filter_movies():
     url = f"https://moviebox.ph/web/film?type=/home/movieFilter&tabId=2&classify=All&country={country}&genre={genre}&sort=ForYou&year={year}"
     
     try:
-        response = requests.get(url, impersonate=BROWSER_IMPERSONATE, timeout=10)
+        response = scraper.get(url, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         results = []
@@ -115,6 +120,5 @@ def filter_movies():
     except Exception as e:
          return jsonify({"success": False, "error": str(e)}), 500
 
-# Wajib untuk Vercel Serverless Function
 if __name__ == '__main__':
     app.run(debug=True)
