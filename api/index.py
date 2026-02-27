@@ -1,9 +1,8 @@
-
 import urllib.request
-from bs4 import BeautifulSoup
-import json
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 CORS(app)
@@ -14,67 +13,18 @@ HEADERS = {
     'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
 }
 
-# --- FUNGSI BANTUAN ---
 def fetch_html(url):
+    # Dibatasi 8 detik biar Vercel nggak motong sepihak (Timeout Vercel = 10 detik)
     req = urllib.request.Request(url, headers=HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=8) as response:
             return response.read().decode('utf-8')
     except Exception as e:
-        raise Exception(f"Gagal narik HTML: {str(e)}")
+        return str(e) # Return errornya sebagai string biar nggak crash
 
-def extract_nuxt_data(html):
-    soup = BeautifulSoup(html, 'html.parser')
-    # Cari tag script yang isinya data JSON rahasia Nuxt
-    nuxt_script = soup.find('script', id='__NUXT_DATA__')
-    if not nuxt_script:
-        return None
-    try:
-        return json.loads(nuxt_script.string)
-    except:
-        return None
-
-def parse_nuxt_array(nuxt_array):
-    movies = []
-    seen_titles = set()
-    
-    # Nuxt 3 memecah data JSON jadi array index (Devalue format).
-    # Kita looping buat ngerakit ulang object-object di dalamnya.
-    for item in nuxt_array:
-        if isinstance(item, dict):
-            resolved = {}
-            for key, val in item.items():
-                # Jika value adalah angka, itu adalah pointer ke index array
-                if isinstance(val, int) and val < len(nuxt_array):
-                    resolved[key] = nuxt_array[val]
-                else:
-                    resolved[key] = val
-            
-            # Ciri-ciri data film: Punya judul dan gambar
-            title = resolved.get('title') or resolved.get('name') or resolved.get('vodName') or resolved.get('movieName')
-            pic = resolved.get('cover') or resolved.get('pic') or resolved.get('vodPic') or resolved.get('posterUrl') or resolved.get('coverUrl')
-            
-            # Validasi apakah ini beneran film
-            if title and isinstance(title, str) and pic and isinstance(pic, str) and len(title) > 1:
-                if title not in seen_titles and ('http' in pic or pic.startswith('/')):
-                    seen_titles.add(title)
-                    
-                    movies.append({
-                        "title": title,
-                        "thumbnail": pic,
-                        "id": resolved.get('id') or resolved.get('vodId') or resolved.get('movieId') or '',
-                        "rating": resolved.get('score') or resolved.get('rating') or resolved.get('doubanScore') or 'N/A',
-                        "year": resolved.get('year') or resolved.get('releaseYear') or ''
-                    })
-    return movies
-
-# --- ENDPOINT API ---
 @app.route('/')
 def home():
-    return jsonify({
-        "status": "API Moviebox NUXT Bypass Aktif!", 
-        "endpoints": ["/search?keyword=...", "/detail?url=..."]
-    })
+    return jsonify({"status": "API Moviebox Regex Mode Aktif!"})
 
 @app.route('/search')
 def search():
@@ -82,51 +32,51 @@ def search():
     if not keyword:
         return jsonify({"error": "Butuh parameter keyword"}), 400
 
+    # Tetep nembak halaman WEB aslinya, BUKAN API
     url = f"https://moviebox.ph/web/searchResult?keyword={keyword.replace(' ', '+')}"
     
     try:
         html = fetch_html(url)
-        nuxt_array = extract_nuxt_data(html)
         
-        if not nuxt_array:
-            return jsonify({"success": False, "error": "Gagal menemukan __NUXT_DATA__ di web aslinya"}), 500
-            
-        results = parse_nuxt_array(nuxt_array)
+        # Kalau response dari urllib ngeluarin pesan error timeout/forbidden
+        if "HTTP Error" in html or "timed out" in html.lower():
+            return jsonify({
+                "success": False, 
+                "error": "Diblokir atau Timeout dari Moviebox",
+                "detail_error": html
+            }), 500
+
+        # --- STRATEGI SUPER RINGAN: REGEX BARBAR ---
+        # Kita potong bagian script NUXT_DATA biar fokus nyari data di situ
+        nuxt_match = re.search(r'<script id="__NUXT_DATA__"[^>]*>(.*?)</script>', html)
         
+        if not nuxt_match:
+            return jsonify({
+                "success": False, 
+                "error": "HTML berhasil ditarik, tapi data film tidak ditemukan. Server Moviebox mungkin mengirim halaman Captcha."
+            }), 500
+
+        raw_data = nuxt_match.group(1)
+        
+        # Cari semua URL gambar poster pakai Regex
+        # Poster Moviebox biasanya disimpen di h5-static.aoneroom.com
+        posters = re.findall(r'https://h5-static[^\s"\'\\]+\.(?:jpg|png|jpeg|webp)', raw_data)
+        
+        # Hilangkan duplikat gambar
+        unique_posters = list(set(posters))
+
         return jsonify({
             "success": True, 
-            "keyword": keyword, 
-            "total_found": len(results), 
-            "data": results
+            "message": "Berhasil menembus HTML Web Moviebox!",
+            "total_poster_ditemukan": len(unique_posters),
+            "data_mentah": {
+                # Gua return sebagian list posternya aja dulu buat bukti kalau datanya tembus
+                "thumbnails": unique_posters[:15] 
+            }
         })
+
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-@app.route('/detail')
-def detail():
-    # Contoh pakai: /detail?url=https://moviebox.ph/detail/sweet-home-...
-    target_url = request.args.get('url', '')
-    if not target_url:
-        return jsonify({"error": "Butuh parameter url"}), 400
-
-    try:
-        html = fetch_html(target_url)
-        nuxt_array = extract_nuxt_data(html)
-        
-        if not nuxt_array:
-            return jsonify({"success": False, "error": "Gagal menemukan __NUXT_DATA__ di web aslinya"}), 500
-            
-        # Karena halaman detail cuma 1 film, algoritma parse_nuxt_array 
-        # bakal otomatis nangkep data film spesifik tersebut
-        results = parse_nuxt_array(nuxt_array)
-        
-        return jsonify({"success": True, "data": results})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-@app.errorhandler(404)
-def page_not_found(e):
-    return jsonify({"error": "Endpoint tidak ditemukan"}), 404
+        return jsonify({"success": False, "error": f"Error internal kode: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
