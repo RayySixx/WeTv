@@ -7,12 +7,11 @@ import urllib.error
 app = Flask(__name__)
 CORS(app)
 
-# Header standar biar nggak dikira bot murahan
+# Header standar biar nggak dikira bot
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
 
-# Fungsi bantuan buat narik HTML pakai bawaan Python
 def fetch_html(url):
     req = urllib.request.Request(url, headers=HEADERS)
     try:
@@ -32,7 +31,7 @@ def home():
 def search():
     keyword = request.args.get('keyword', '')
     if not keyword:
-        return jsonify({"error": "Masukkan parameter keyword"}), 400
+        return jsonify({"error": "Masukkan parameter keyword. Contoh: /search?keyword=spiderman"}), 400
 
     url = f"https://moviebox.ph/web/searchResult?keyword={keyword}"
     
@@ -41,7 +40,7 @@ def search():
         soup = BeautifulSoup(html, 'html.parser')
         
         results = []
-        # NOTE: Class 'movie-item' ini wajib lu sesuaikan dengan hasil inspect element web asli
+        # NOTE: Class 'movie-item' wajib disesuaikan dengan web aslinya
         items = soup.find_all('div', class_='movie-item') 
         
         for item in items:
@@ -64,13 +63,12 @@ def search():
 def detail():
     target_url = request.args.get('url')
     if not target_url:
-         return jsonify({"error": "Parameter url dibutuhkan"}), 400
+         return jsonify({"error": "Parameter url dibutuhkan. Contoh: /detail?url=https://..."}), 400
 
     try:
         html = fetch_html(target_url)
         soup = BeautifulSoup(html, 'html.parser')
         
-        # NOTE: Sesuaikan tag dan class di bawah ini
         detail_data = {
             "title": soup.find('h1').text.strip() if soup.find('h1') else "Tidak diketahui",
             "synopsis": soup.find('div', class_='desc').text.strip() if soup.find('div', class_='desc') else "",
@@ -83,7 +81,6 @@ def detail():
 
 @app.route('/play')
 def play():
-    # URL target ini harus link yang mengarah ke 123movienow.cc
     target_url = request.args.get('url') 
     if not target_url:
          return jsonify({"error": "Parameter url dibutuhkan"}), 400
@@ -116,7 +113,7 @@ def filter_movies():
         soup = BeautifulSoup(html, 'html.parser')
         
         results = []
-        items = soup.find_all('div', class_='filter-item') # Sesuaikan class
+        items = soup.find_all('div', class_='filter-item') 
         
         for item in items:
              results.append({
@@ -126,6 +123,15 @@ def filter_movies():
         return jsonify({"success": True, "filters": {"genre": genre, "country": country, "year": year}, "data": results})
     except Exception as e:
          return jsonify({"success": False, "error": str(e)}), 500
+
+# Penangkap Error 404 dari sisi Flask
+@app.errorhandler(404)
+def page_not_found(e):
+    return jsonify({
+        "error": "404 Not Found", 
+        "message": "Endpoint yang lu tuju nggak ada bro. Cek lagi URL-nya.",
+        "path_yang_direquest": request.path
+    }), 404
 
 if __name__ == '__main__':
     app.run(debug=True)
