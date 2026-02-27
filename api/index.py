@@ -1,23 +1,30 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
-import cloudscraper
+import urllib.request
+import urllib.error
 
 app = Flask(__name__)
-CORS(app) # Mengatasi error CORS saat API diakses lewat frontend HTML
+CORS(app)
 
-# Bikin instance scraper yang nyamar jadi Chrome di Windows
-# Ini otomatis nge-handle bypass dasar WAF/Cloudflare
-scraper = cloudscraper.create_scraper(browser={
-    'browser': 'chrome',
-    'platform': 'windows',
-    'desktop': True
-})
+# Header standar biar nggak dikira bot murahan
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
+
+# Fungsi bantuan buat narik HTML pakai bawaan Python
+def fetch_html(url):
+    req = urllib.request.Request(url, headers=HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return response.read().decode('utf-8')
+    except Exception as e:
+        raise Exception(f"Gagal mengambil data dari target: {str(e)}")
 
 @app.route('/')
 def home():
     return jsonify({
-        "status": "API Moviebox dengan Cloudscraper Aktif!", 
+        "status": "API Moviebox Basic Mode Aktif!", 
         "endpoints": ["/search?keyword=...", "/detail?url=...", "/play?url=...", "/filter?genre=..."]
     })
 
@@ -30,11 +37,11 @@ def search():
     url = f"https://moviebox.ph/web/searchResult?keyword={keyword}"
     
     try:
-        response = scraper.get(url, timeout=15)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        html = fetch_html(url)
+        soup = BeautifulSoup(html, 'html.parser')
         
         results = []
-        # NOTE: Class 'movie-item' wajib lu sesuaikan dengan hasil inspect element web asli
+        # NOTE: Class 'movie-item' ini wajib lu sesuaikan dengan hasil inspect element web asli
         items = soup.find_all('div', class_='movie-item') 
         
         for item in items:
@@ -60,8 +67,8 @@ def detail():
          return jsonify({"error": "Parameter url dibutuhkan"}), 400
 
     try:
-        response = scraper.get(target_url, timeout=15)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        html = fetch_html(target_url)
+        soup = BeautifulSoup(html, 'html.parser')
         
         # NOTE: Sesuaikan tag dan class di bawah ini
         detail_data = {
@@ -82,8 +89,8 @@ def play():
          return jsonify({"error": "Parameter url dibutuhkan"}), 400
          
     try:
-        response = scraper.get(target_url, timeout=15)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        html = fetch_html(target_url)
+        soup = BeautifulSoup(html, 'html.parser')
         
         video_src = soup.find('video')
         iframe_src = soup.find('iframe')
@@ -105,8 +112,8 @@ def filter_movies():
     url = f"https://moviebox.ph/web/film?type=/home/movieFilter&tabId=2&classify=All&country={country}&genre={genre}&sort=ForYou&year={year}"
     
     try:
-        response = scraper.get(url, timeout=15)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        html = fetch_html(url)
+        soup = BeautifulSoup(html, 'html.parser')
         
         results = []
         items = soup.find_all('div', class_='filter-item') # Sesuaikan class
