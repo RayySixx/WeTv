@@ -1,113 +1,190 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from fastapi import FastAPI, HTTPException
+import httpx
 from bs4 import BeautifulSoup
-import urllib.request
-import urllib.error
-import re
-import json
+from urllib.parse import quote
 
-app = Flask(__name__)
-CORS(app)
+app = FastAPI(title="Movie Scraper API")
 
+BASE_URL = "https://shadowofthevampire.com"
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-def fetch_html(url):
-    req = urllib.request.Request(url, headers=HEADERS)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            return response.read().decode('utf-8')
-    except Exception as e:
-        raise Exception(f"Gagal narik data: {str(e)}")
+# --- HELPER FUNCTION ---
+def is_safe_content(text: str) -> bool:
+    """Filter untuk membuang konten berbau 'semi'"""
+    if not text:
+        return True
+    forbidden_words = ["semi", "film semi korea, jepang, philippines"]
+    text_lower = text.lower()
+    return not any(word in text_lower for word in forbidden_words)
 
-@app.route('/')
+# --- ROUTES ---
+
+@app.get("/")
 def home():
-    return jsonify({"status": "Scraper Stabil Aktif!", "info": "Gunakan endpoint /search"})
+    return {"message": "Scraper API is running!", "status": "OK"}
 
-@app.route('/search')
-def search():
-    keyword = request.args.get('keyword', '')
-    if not keyword:
-        return jsonify({"error": "Butuh parameter keyword"}), 400
+@app.get("/api/home")
+async def get_home():
+    """Scrape Home & filter kategori"""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(BASE_URL, headers=HEADERS, timeout=10.0)
+        soup = BeautifulSoup(response.text, 'html.parser')
 
-    url = f"https://moviebox.ph/web/searchResult?keyword={keyword.replace(' ', '+')}"
-    
-    try:
-        html = fetch_html(url)
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        results = []
-        seen_titles = set()
-        
-        # STRATEGI 1: Bongkar brankas rahasia NUXT_DATA tanpa nembak API
-        nuxt_script = soup.find('script', id='__NUXT_DATA__')
-        if nuxt_script:
-            try:
-                data = json.loads(nuxt_script.string)
-                # Nuxt nyimpen data dalam bentuk array datar. Kita cari yang bentuknya dictionary
-                for item in data:
-                    if isinstance(item, dict):
-                        # Cari index yang nyimpen judul & gambar
-                        title_idx = item.get('vodName') or item.get('title') or item.get('name')
-                        pic_idx = item.get('vodPic') or item.get('pic') or item.get('cover')
-                        
-                        if isinstance(title_idx, int) and isinstance(pic_idx, int):
-                            # Tarik string aslinya dari index
-                            title = data[title_idx] if title_idx < len(data) else ""
-                            pic = data[pic_idx] if pic_idx < len(data) else ""
-                            
-                            # Validasi kalau ini beneran film
-                            if isinstance(title, str) and isinstance(pic, str) and len(title) > 1:
-                                if title not in seen_titles and ('http' in pic or pic.startswith('/')):
-                                    seen_titles.add(title)
-                                    results.append({
-                                        "title": title,
-                                        "thumbnail": pic,
-                                        "link": f"/search_result_{title.replace(' ', '_')}" # Link smentara
-                                    })
-            except Exception as e:
-                pass # Kalau gagal ekstrak JSON, biarin aja lanjut ke Strategi 2
+    data = []
+    # Ganti 'div.category-block' dengan class pembungkus kategori di web aslinya
+    categories = soup.find_all('div', class_='category-block') 
 
-        # STRATEGI 2: Fallback pakai cara asli lu (Tag A) kalau NUXT kosong
-        if not results:
-            links = soup.find_all('a', href=True)
-            for a in links:
-                href = a['href']
-                if 'detail' in href.lower() or 'movie' in href.lower():
-                    img = a.find('img') or a.parent.find('img') 
-                    title = a.text.strip()
-                    
-                    if img and title and title not in seen_titles:
-                        seen_titles.add(title)
-                        results.append({
-                            "title": title,
-                            "link": href,
-                            "thumbnail": img.get('src') or img.get('data-src', ''),
-                        })
+    for cat in categories:
+        cat_title_tag = cat.find('h2') # Misal judul kategori pakai <h2>
+        cat_title = cat_title_tag.text.strip() if cat_title_tag else "Unknown"
 
-        # FILTER SAMPAH: Buang menu-menu web yang ikut ke-scrape
-        final_results = []
-        sampah = ["MovieBox", "Movie", "Old Moviebox", "Always Find Us", "Official Link Release", "Contact Us"]
-        
-        for r in results:
-            # Pastikan judulnya bukan menu web, dan linknya bukan link email/keluar
-            if r['title'] not in sampah and "mailto:" not in r['link'] and "moviebox.co" not in r['link']:
-                final_results.append(r)
+        # FILTERING KATEGORI
+        if not is_safe_content(cat_title):
+            continue
 
-        # Kalau beneran kosong, tampilkan pesan error
-        if not final_results:
-            return jsonify({
-                "success": False, 
-                "message": "Data film tidak ditemukan di NUXT maupun HTML.",
+        movies = []
+        # Ganti 'article.item' dengan class item filmnya
+        items = cat.find_all('article', class_='item') 
+        for item in items:
+            title = item.find('h3').text.strip() if item.find('h3') else ""
+            thumb = item.find('img')['src'] if item.find('img') else ""
+            rating = item.find('span', class_='rating').text.strip() if item.find('span', class_='rating') else ""
+            link = item.find('a')['href'] if item.find('a') else ""
+
+            movies.append({
+                "title": title,
+                "thumbnail": thumb,
+                "rating": rating,
+                "endpoint": link.replace(BASE_URL, "")
             })
 
-        return jsonify({"success": True, "data": final_results})
-        
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        data.append({
+            "category": cat_title,
+            "movies": movies
+        })
 
-if __name__ == '__main__':
-    app.run(debug=True)
+    return {"result": data}
+
+
+@app.get("/api/stream")
+async def get_stream(endpoint: str):
+    """Scrape halaman streaming beserta detail meta datanya"""
+    url = f"{BASE_URL}{endpoint}" if endpoint.startswith("/") else f"{BASE_URL}/{endpoint}"
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=HEADERS, timeout=10.0)
+        if response.status_code != 200:
+            raise HTTPException(status_code=404, detail="Film tidak ditemukan")
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+    # Parsing Deskripsi (Ganti class sesuai web)
+    description = soup.find('div', class_='description').text.strip() if soup.find('div', class_='description') else ""
+    
+    # Parsing Meta Data
+    meta_data = {}
+    meta_ul = soup.find('ul', class_='meta-list') # Ganti sesuai container meta
+    if meta_ul:
+        for li in meta_ul.find_all('li'):
+            key_tag = li.find('b')
+            if key_tag:
+                key = key_tag.text.replace(':', '').strip()
+                val = li.text.replace(key_tag.text, '').strip()
+                meta_data[key] = val
+
+    # Filter by Genre dari Meta Data
+    if "Genre" in meta_data and not is_safe_content(meta_data["Genre"]):
+        raise HTTPException(status_code=403, detail="Konten tidak diizinkan (Genre diblokir)")
+
+    # Parsing Video Iframe & Server
+    iframe_tag = soup.find('iframe')
+    video_url = iframe_tag['src'] if iframe_tag else ""
+
+    servers = []
+    server_list = soup.find_all('a', class_='server-btn') # Ganti sesuai tombol server
+    for srv in server_list:
+        servers.append({"name": srv.text.strip(), "link": srv.get('href', '')})
+
+    return {
+        "title": soup.find('h1').text.strip() if soup.find('h1') else "Unknown",
+        "description": description,
+        "meta": meta_data,
+        "video_iframe": video_url,
+        "servers": servers
+    }
+
+
+@app.get("/api/search")
+async def search_movies(q: str):
+    """Scrape fitur pencarian"""
+    url = f"{BASE_URL}/?s={quote(q)}&post_type[]=post&post_type[]=tv"
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=HEADERS, timeout=10.0)
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+    results = []
+    items = soup.find_all('article', class_='item') # Sesuaikan class
+    
+    for item in items:
+        # Coba ambil genre (biasanya di pencarian ada label genre)
+        genre_tag = item.find('span', class_='genre')
+        genre_text = genre_tag.text.strip() if genre_tag else ""
+
+        # FILTERING GENRE PADA HASIL PENCARIAN
+        if not is_safe_content(genre_text):
+            continue
+
+        title = item.find('h3').text.strip() if item.find('h3') else ""
+        thumb = item.find('img')['src'] if item.find('img') else ""
+        rating = item.find('span', class_='rating').text.strip() if item.find('span', class_='rating') else ""
+        link = item.find('a')['href'] if item.find('a') else ""
+
+        results.append({
+            "title": title,
+            "thumbnail": thumb,
+            "rating": rating,
+            "genre": genre_text,
+            "endpoint": link.replace(BASE_URL, "")
+        })
+
+    return {"query": q, "total": len(results), "results": results}
+
+
+@app.get("/api/filter/{filter_type}/{filter_value}")
+async def filter_movies(filter_type: str, filter_value: str):
+    """
+    Handle route seperti:
+    - /action/ -> filter_type='genre', filter_value='action'
+    - /year/2016/ -> filter_type='year', filter_value='2016'
+    """
+    # Sesuaikan URL pattern dari web aslinya
+    if filter_type == "genre":
+        url = f"{BASE_URL}/{filter_value}/"
+    else:
+        url = f"{BASE_URL}/{filter_type}/{filter_value}/"
+
+    # Jika user maksa buka genre semi via URL API lu, langsung tolak
+    if filter_type == "genre" and not is_safe_content(filter_value):
+        raise HTTPException(status_code=403, detail="Kategori diblokir")
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=HEADERS, timeout=10.0)
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+    results = []
+    items = soup.find_all('article', class_='item') # Sesuaikan class
+    
+    for item in items:
+        title = item.find('h3').text.strip() if item.find('h3') else ""
+        thumb = item.find('img')['src'] if item.find('img') else ""
+        link = item.find('a')['href'] if item.find('a') else ""
+
+        results.append({
+            "title": title,
+            "thumbnail": thumb,
+            "endpoint": link.replace(BASE_URL, "")
+        })
+
+    return {"filter": f"{filter_type}: {filter_value}", "results": results}
