@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Query
-from scraper import (
+from .scraper import (
     scrape_home_categories,
     scrape_movie_detail,
     search,
