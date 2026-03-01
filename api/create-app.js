@@ -35,9 +35,18 @@ export default async function handler(req, res) {
   fs.writeFileSync(tempPath, iconFile.buffer);
 
   try {
-    // Jalankan browser
+    // Konfigurasi argumen untuk Puppeteer
     const browser = await puppeteer.launch({
-      args: chromium.args,
+      args: [
+        ...chromium.args,
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-extensions',
+        '--disable-features=HttpsFirstBalancedModeAutoEnable', // hindari error ERR_BLOCKED_BY_CLIENT
+      ],
       executablePath: await chromium.executablePath(),
       headless: chromium.headless,
       defaultViewport: { width: 1280, height: 800 },
