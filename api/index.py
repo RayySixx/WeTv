@@ -1,39 +1,62 @@
-from fastapi import FastAPI, Query
-from .scraper import (
-    scrape_home_categories,
-    scrape_movie_detail,
-    search,
-    filter_by_genre,
-    filter_by_year,
-    filter_by_country
-)
+from flask import Flask, request, jsonify
+import requests
 
-app = FastAPI()
+app = Flask(__name__)
 
-@app.get("/")
-def root():
-    return {"message": "Scraper API for shadowofthevampire.com"}
+@app.route('/api/build', methods=['POST'])
+def build_app():
+    try:
+        # 1. Ambil data dari form HTML
+        website_url = request.form.get('url')
+        app_name = request.form.get('appName')
+        email = request.form.get('email')
+        icon_file = request.files.get('icon')
 
-@app.get("/home")
-def home_categories():
-    return scrape_home_categories()
+        if not all([website_url, app_name, email, icon_file]):
+            return jsonify({"status": "error", "message": "Semua data wajib diisi!"}), 400
 
-@app.get("/detail")
-def movie_detail(url: str):
-    return scrape_movie_detail(url)
+        # 2. Setup Session untuk request ke Median.co
+        session = requests.Session()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Referer": "https://median.co/"
+        }
 
-@app.get("/search")
-def search_movies(q: str = Query(..., description="Search query")):
-    return search(q)
+        # --- PERHATIAN: GANTI ENDPOINT DI BAWAH SESUAI HASIL INSPECT NETWORK ---
+        
+        # A. Create App
+        create_payload = {"websiteUrl": website_url, "appName": app_name, "email": email}
+        # req_create = session.post("URL_ASLI_CREATE_DARI_NETWORK_TAB", json=create_payload, headers=headers)
+        # app_id = req_create.json().get("appId") 
+        
+        # B. Upload Icon
+        # icon_data = icon_file.read() # Baca file ke memori (karena Vercel serverless)
+        # files = {'file': (icon_file.filename, icon_data, icon_file.mimetype)}
+        # req_upload = session.post(f"URL_ASLI_UPLOAD/{app_id}/icon", files=files, headers=headers)
+        
+        # C. Trigger Build
+        # req_build = session.post(f"URL_ASLI_BUILD/{app_id}/build", headers=headers)
 
-@app.get("/genre/{genre}")
-def by_genre(genre: str):
-    return filter_by_genre(genre)
+        # --- BATAS KODE YANG HARUS DISESUAIKAN ---
 
-@app.get("/year/{year}")
-def by_year(year: str):
-    return filter_by_year(year)
+        # SIMULASI RESPONSE (Hapus ini jika kode di atas sudah berjalan):
+        app_id = "7qaqzjbvzrjaqmjvyadxjvzhac" # Contoh ID dummy
 
-@app.get("/country/{country}")
-def by_country(country: str):
-    return filter_by_country(country)
+        # 3. Kembalikan link status ke Frontend
+        check_url = f"https://median.co/app/{app_id}/build#app-download"
+        
+        return jsonify({
+            "status": "success",
+            "message": "Aplikasi sedang diproses di server Median!",
+            "data": {
+                "app_id": app_id,
+                "check_url": check_url
+            }
+        })
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# Wajib untuk Vercel Serverless
+if __name__ == '__main__':
+    app.run(debug=True)
